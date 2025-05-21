@@ -1,0 +1,49 @@
+{
+  "name": "th123aphostchecker",
+  "main": "./out/main/index.js",
+  "private": true,
+  "type": "commonjs",
+  "version": "1.2.0",
+  "scripts": {
+    "start": "electron-vite preview",
+    "dev": "electron-vite dev",
+    "prebuild": "electron-vite build",
+    "build": "electron-builder --win --x64",
+    "dist": "npm run prebuild && electron-builder --win --x64",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^4.0.0",
+    "@fontsource/roboto": "5.2.5",
+    "@mdi/font": "7.4.47",
+    "core-js": "^3.42.0",
+    "dgram": "^1.0.1",
+    "vis-network": "^9.1.10",
+    "vue": "^3.5.13",
+    "vue-echarts": "^7.0.3",
+    "vuetify": "^3.8.1"
+  },
+  "build": {
+    "win": {
+      "target": "portable",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "asar": true,
+    "mac": null,
+    "linux": null,
+    "artifactName": "th123lagchecker.${ext}"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "electron": "^35.1.5",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "globals": "^16.0.0",
+    "sass-embedded": "^1.86.3",
+    "unplugin-fonts": "^1.3.1",
+    "unplugin-vue-components": "^28.4.1",
+    "vite": "^6.2.2",
+    "vite-plugin-vuetify": "^2.1.1"
+  }
+}
