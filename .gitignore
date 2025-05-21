@@ -27,4 +27,7 @@ out
 .DS_Store
 .eslintcache
 *.log*
+
+# 最終的に消すやつら
 test.js
+main.yml
