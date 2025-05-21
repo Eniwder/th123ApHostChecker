@@ -8,6 +8,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 const execAsync = promisify(exec);
 
+// TODO 自分自身もチェックする
 async function checkFirewallRule() {
   const psCommand = `
 Get-NetFirewallRule | Where-Object {
