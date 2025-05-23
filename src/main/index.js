@@ -28,7 +28,10 @@ Get-NetFirewallRule | Where-Object {
 }
 
 
-const MY_PORT = 8007;
+const BindPort = 106120;
+let relayHost = 'delthas.fr';
+const RelayPort = 14763;
+
 let mainWindow;
 
 async function getIP(domain) {
@@ -41,11 +44,98 @@ async function getIP(domain) {
 }
 
 ipcMain.on('checkFW', async (event, arg) => {
+  console.log(RelayHost);
   const { result, msg } = await checkFirewallRule();
   event.reply('checkFW', { result, msg });
 });
 
 const client = dgram.createSocket('udp4');
+
+client.on('error', (err) => {
+  console.error('Socket error:', err);
+  client.close();
+});
+
+let timers = [];
+let myExternalIpPort = '';
+
+// 5秒毎にIPを登録し、さらに自分の情報も取得する
+function register2AP(event, myIp, myPort) {
+  const portBuf = (port) => {
+    const buf = Buffer.alloc(2);
+    buf.writeUInt16BE(port, 0);
+    return buf;
+  };
+  const ipPortBuf = (ip, port) => {
+    const buf = Buffer.alloc(8);
+    buf.writeUInt16BE(port, 0);
+    buf.writeUInt8(ipParts[0], 2);
+    buf.writeUInt8(ipParts[1], 3);
+    buf.writeUInt8(ipParts[2], 4);
+    buf.writeUInt8(ipParts[3], 5);
+    buf.writeUInt16BE(port, 6);
+    return buf;
+  };
+
+  client.send(portBuf(myPort), RelayPort, relayHost, (err) => {
+    if (err) {
+      const { result, msg } = { result: false, msg: 'オートパンチサーバーにアクセスできませんでした。\nネットワークの設定を見直してください。' };
+      console.error('送信エラー:', err);
+      event.reply('HtoAP', { result, msg });
+      return;
+    }
+  });
+  setTimeout(() => {
+    client.send(ipPortBuf(myIp, myPort), RelayPort, relayHost, (err) => {
+      if (err) {
+        const { result, msg } = { result: false, msg: 'オートパンチサーバーにアクセスできませんでした。\nネットワークの設定を見直してください。' };
+        console.error('送信エラー:', err);
+        event.reply('HtoAP', { result, msg });
+        return;
+      }
+    });
+  }, 50);
+}
+
+function getApResponse(msg, rinfo) {
+  if (msg.length >= 8) {
+    const peerPort = msg.readUInt16BE(0);
+    peerNatPort = msg.readUInt16BE(2);
+    peerIp = `${msg[4]}.${msg[5]}.${msg[6]}.${msg[7]} `;
+    myExternalIpPort = `${peerIp}:${peerNatPort}`;
+
+    console.log(`Host:${peerIp}:${peerPort}/NAT Port:${peerNatPort}`);
+
+    myExternalIpPort = `${peerIp}:${peerNatPort}`;
+    mainWindow.webContents.send('get-my-ip', myExternalIpPort);
+  }
+}
+
+ipcMain.on('HtoAP', async (event, arg) => {
+  try {
+    relayHost = await getIP('delthas.fr'); // AP server
+  } catch (e) {
+    console.error('DNS lookup error:', e);
+    event.reply('HtoAP', { result: false, msg: 'オートパンチサーバーのDNS情報を取得できませんでした。\nネットワークの設定を見直してください。' });
+    return;
+  }
+  const [myIp, myPort] = arg.split(':');
+  register2AP(event, myIp, myPort);
+
+
+
+  client.on('message', holepunchProcess);
+
+
+  const waitClient = (msg, rinfo) => {
+
+
+  };
+
+  console.log('オートパンチサーバーにアクセス');
+  // 5秒毎にIPを登録
+
+});
 
 ipcMain.on('do-ping-ap', async (event, arg) => {
 
@@ -252,7 +342,7 @@ if (!gotTheLock) {
 } else {
   app.whenReady().then(() => {
     createWindow();
-    client.bind(MY_PORT);
+    client.bind(BindPort);
     electronApp.setAppUserModelId(app.getName());
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window);

@@ -5,7 +5,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch, defineEmits } from 'vue';
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { Network } from 'vis-network';
 import { GraphState, EdgeColors } from '../constants.js';
 

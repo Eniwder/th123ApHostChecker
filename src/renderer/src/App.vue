@@ -191,6 +191,7 @@ function checkLog(success) {
     logs[logs.length - 1] = logs.last().replace(']', '] ✅ ');
   } else {
     logs[logs.length - 1] = logs.last().replace(']', '] ❌ ');
+    currentState.value = GraphState.Error;
   }
 }
 
@@ -198,20 +199,13 @@ async function testHost() {
   checkbtn.progress = true;
   logs.splice(0, logs.length);
 
-  // window.ipcRenderer.send('checkFW');
   changeStep(Step.FW4H, GraphState.Pooling);
-  const { result, msg } = await ipcPromisify('checkFW');
-  logs.push('[1/6] ファイアウォールのルールを取得。');
-  await delay(StepDelay);
-  checkLog(result);
-  logs.push(msg);
-  await delay(StepDelay);
+  logs.push('[1/6] ファイアウォールのルールを取得します。');
+  if (await waitIpc('checkFW')) return;
 
-  window.ipcRenderer.send('toAP', inputIpport.value);
   changeStep(Step.Host2AP, GraphState.Pooling);
-  logs.push('[2/6] オートパンチにホスト情報を送信。クライアントからのアクセスを待機中。');
-  await delay(StepDelay);
-  checkLog(false);
+  logs.push('[2/6] オートパンチにホスト情報を送信。クライアントからのアクセスを待機中。3分後にタイムアウトします。');
+  if (await waitIpc('HtoAP')) return;
 
   changeStep(Step.AP2User, GraphState.Ping);
   logs.push('[3/6] クライアントがオートパンチにアクセスし、お互いの情報を取得しました。');
@@ -234,15 +228,25 @@ async function testHost() {
   logs.push('[6/6] クライアントと通信に成功しました。ホスト可能です。');
 }
 
+async function waitIpc(eventName, ...args) {
+  window.ipcRenderer.send(eventName, ...args);
+  const { result, msg } = await ipcPromisify(eventName);
+  await delay(StepDelay);
+  checkLog(result);
+  logs.push(msg);
+  return result;
+}
+
 async function testClient() {
   checkbtn.progress = true;
   logs.splice(0, logs.length);
 
-  // window.ipcRenderer.send('checkFW');
-  // await waitCheckFW('checkFW');
-  changeStep(Step.FW4C, GraphState.Pooling);
+  changeStep(Step.FW4H, GraphState.Pooling);
   logs.push('[1/5] ファイアウォールのルールを取得します。');
-  logs.push('OK');
+  const { result, msg } = await ipcPromisify('checkFW');
+  await delay(StepDelay);
+  checkLog(result);
+  logs.push(msg);
   await delay(StepDelay);
 
   window.ipcRenderer.send('toAP', inputIpport.value);
