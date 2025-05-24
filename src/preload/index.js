@@ -14,6 +14,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('ipcRenderer', {
       send: (...args) => ipcRenderer.send(...args),
       on: (...args) => ipcRenderer.on(...args),
+      removeListener: (...args) => ipcRenderer.removeListener(...args),
       removeAllListeners: (...args) => ipcRenderer.removeAllListeners(...args),
     });
   } catch (error) {

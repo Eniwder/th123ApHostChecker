@@ -201,19 +201,20 @@ async function testHost() {
 
   changeStep(Step.FW4H, GraphState.Pooling);
   logs.push('[1/4] ファイアウォールのルールを取得します。');
-  if (await waitIpc('checkFW')) return;
+  if (!(await waitIpc('checkFW'))) return;
 
   changeStep(Step.Host2AP, GraphState.Pooling);
   logs.push('[2/4] オートパンチにホスト情報を送信。クライアントからのアクセスを待機中。1分後にタイムアウトします。');
   // TODO : タイムアウト処理
-  if (await waitIpc('HtoAP', inputIpport.value)) return;
+  // Promise.race([ipcPromisify(...), timeoutPromise])　みたいなのがいいらしい
+  if (!(await waitIpc('HtoAP', inputIpport.value))) return;
   changeStep(Step.AP2User, GraphState.Ping);
   await delay(StepDelay * 1.5);
 
   changeStep(Step.Host2Stun, GraphState.Ping);
   logs.push('[3/4] Googleにアクセスして外部ポートの変化を確認します。');
   await delay(StepDelay);
-  if (await waitIpc('toSTUN')) return;
+  if (!(await waitIpc('toSTUN'))) return;
   changeStep(Step.Stun2Host, GraphState.Ping);
   await delay(StepDelay);
 
@@ -221,7 +222,7 @@ async function testHost() {
   logs.push('[4/4] クライアントとUDPホールパンチングを実施します。30秒後にタイムアウトします。');
   // TODO : タイムアウト処理
   await delay(StepDelay);
-  if (await waitIpc('toClient')) return;
+  if (!(await waitIpc('toClient'))) return;
   logs.push('検証を終了します。お疲れ様でした。');
 }
 
@@ -267,7 +268,7 @@ async function testClient() {
 function ipcPromisify(eventName, ...args) {
   return new Promise((resolve, reject) => {
     const handler = (event, ...result) => {
-      window.ipcRenderer.removeAllListeners();
+      window.ipcRenderer.removeListener(eventName, handler);
       resolve(...result);
     };
     window.ipcRenderer.on(eventName, handler);
@@ -275,10 +276,7 @@ function ipcPromisify(eventName, ...args) {
   });
 }
 
-function waitCheckFW() { return ipcPromisify('checkFW'); }
-
-
-
+// TODO
 function suspend() {
   checkbtn.progress = false;
   changeStep(Step.Noop, GraphState.Idle);
