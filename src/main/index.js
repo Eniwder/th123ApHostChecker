@@ -6,7 +6,65 @@ import { promises as dns } from 'dns';
 import dgram from 'dgram';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+const { dialog } = require('electron');
 const execAsync = promisify(exec);
+
+const BindPort = 106120;
+const RelayHost = 'delthas.fr';
+const RelayPort = 14763;
+const client = dgram.createSocket('udp4');
+const StunHost = 'stun.l.google.com';
+const StunPort = 19302;
+
+let mainWindow;
+let timers = [];
+let myExternalIpPort = '';
+let msgHandler = null;
+let clientIp = '';
+let clientPort = 0;
+
+ipcMain.on('checkFW', async (event, arg) => {
+  const ret = await checkFirewallRule();
+  cleanupAndReply('checkFW', event, ret);
+});
+
+ipcMain.on('HtoAP', async (event, arg) => {
+  let relayIp = '';
+  try {
+    relayIp = await getIP(RelayHost); // AP server
+  } catch (e) {
+    cleanupAndReply('HtoAP', event, { result: false, msg: 'オートパンチサーバーのDNS情報を取得できませんでした。\nネットワークの設定を見直してください。' });
+    return;
+  }
+  const [myIp, myPort] = arg.split(':');
+  // 5秒毎にIPを登録し、さらに自分の情報も取得する
+  msgHandler = getApResponse(event, myIp, myPort);
+  client.on('message', msgHandler);
+  timer.push(setInterval(() => {
+    register2AP(event, myIp, myPort, relayIp);
+  }, 5000));
+});
+
+ipcMain.on('toSTUN', async (event, arg) => {
+  let stunIp = '';
+  try {
+    stunIp = await getIP(StunHost); // AP server
+  } catch (e) {
+    cleanupAndReply('toSTUN', event, { result: false, msg: 'GoogleのSTUNサーバーのDNS情報を取得できませんでした。\nネットワークの設定を見直してください。' });
+    return;
+  }
+  msgHandler = getStunResponse(event);
+  client.on('message', msgHandler);
+  send2Stun(event, stunIp, StunPort);
+});
+
+ipcMain.on('toClient', async (event, arg) => {
+  msgHandler = getHolepunchResponse(event, 'toClient', clientIp);
+  client.on('message', msgHandler);
+  holepunching(event, 'toClient', clientIp, clientPort);
+});
+
+// 各ステップに必要な関数群 *******************************************
 
 // TODO 自分自身もチェックする
 async function checkFirewallRule() {
@@ -27,40 +85,7 @@ Get-NetFirewallRule | Where-Object {
   }
 }
 
-
-const BindPort = 106120;
-let relayHost = 'delthas.fr';
-const RelayPort = 14763;
-
-let mainWindow;
-
-async function getIP(domain) {
-  try {
-    const result = await dns.lookup(domain);
-    return result.address;
-  } catch (err) {
-    console.error('DNS lookup error:', err);
-  }
-}
-
-ipcMain.on('checkFW', async (event, arg) => {
-  console.log(RelayHost);
-  const { result, msg } = await checkFirewallRule();
-  event.reply('checkFW', { result, msg });
-});
-
-const client = dgram.createSocket('udp4');
-
-client.on('error', (err) => {
-  console.error('Socket error:', err);
-  client.close();
-});
-
-let timers = [];
-let myExternalIpPort = '';
-
-// 5秒毎にIPを登録し、さらに自分の情報も取得する
-function register2AP(event, myIp, myPort) {
+function register2AP(event, myIp, myPort, relayIp) {
   const portBuf = (port) => {
     const buf = Buffer.alloc(2);
     buf.writeUInt16BE(port, 0);
@@ -68,6 +93,7 @@ function register2AP(event, myIp, myPort) {
   };
   const ipPortBuf = (ip, port) => {
     const buf = Buffer.alloc(8);
+    const ipParts = ip.split('.').map(Number);
     buf.writeUInt16BE(port, 0);
     buf.writeUInt8(ipParts[0], 2);
     buf.writeUInt8(ipParts[1], 3);
@@ -77,229 +103,56 @@ function register2AP(event, myIp, myPort) {
     return buf;
   };
 
-  client.send(portBuf(myPort), RelayPort, relayHost, (err) => {
+  client.send(portBuf(myPort), RelayPort, relayIp, (err) => {
     if (err) {
-      const { result, msg } = { result: false, msg: 'オートパンチサーバーにアクセスできませんでした。\nネットワークの設定を見直してください。' };
       console.error('送信エラー:', err);
-      event.reply('HtoAP', { result, msg });
+      cleanupAndReply('HtoAP', event, { result: false, msg: 'オートパンチサーバーにアクセスできませんでした。\nネットワークの設定を見直してください。' });
       return;
     }
   });
   setTimeout(() => {
-    client.send(ipPortBuf(myIp, myPort), RelayPort, relayHost, (err) => {
+    client.send(ipPortBuf(myIp, myPort), RelayPort, relayIp, (err) => {
       if (err) {
-        const { result, msg } = { result: false, msg: 'オートパンチサーバーにアクセスできませんでした。\nネットワークの設定を見直してください。' };
         console.error('送信エラー:', err);
-        event.reply('HtoAP', { result, msg });
+        cleanupAndReply('HtoAP', event, { result: false, msg: 'オートパンチサーバーにアクセスできませんでした。\nネットワークの設定を見直してください。' });
         return;
       }
     });
   }, 50);
 }
 
-function getApResponse(msg, rinfo) {
-  if (msg.length >= 8) {
-    const peerPort = msg.readUInt16BE(0);
-    peerNatPort = msg.readUInt16BE(2);
-    peerIp = `${msg[4]}.${msg[5]}.${msg[6]}.${msg[7]} `;
-    myExternalIpPort = `${peerIp}:${peerNatPort}`;
-
-    console.log(`Host:${peerIp}:${peerPort}/NAT Port:${peerNatPort}`);
-
-    myExternalIpPort = `${peerIp}:${peerNatPort}`;
-    mainWindow.webContents.send('get-my-ip', myExternalIpPort);
-  }
+// https://github.com/delthas/autopunch/blob/db0b962a8bed74179997e755e851f99e885a10d1/autopunch-relay/relay.go#L112
+function getApResponse(event, myIp) {
+  let msgs = [];
+  return function getApResponseHelper(msg, rinfo) {
+    if (msg.length >= 8) {
+      const { port1, port2, ip } = parseApResponse(msg);
+      // ホストからクライアントっぽくメッセージを送信もするので、ここではclient用のメッセージも受け取る
+      /// ややこしいが、自分の外部ポートを取得するために必要な処理
+      if (ip === myIp) { // for server msg from AP(クライアントからの凸)
+        if (myExternalIpPort === '') return; // まだ自分のIP:Portを取得していない場合は無視
+        msgs.push('クライアントからの接続を受け取りました。');
+        msgs.push(`　自身(ホスト)の外部IP:Port[${myExternalIpPort}]`);
+        msgs.push(`　クライアントの外部IP:Port[${ip}:${port1}]`);
+        clientIp = ip;
+        clientPort = port1;
+        console.log(`Setting Client Info: ${ip}:${port1}`);
+        client.removeListener('message', msgHandler);
+        cleanupAndReply('HtoAP', event, { result: true, msg: msgs });
+        timers.forEach((t) => clearInterval(t));
+      } else { // for client msg from AP(自身のダミー凸の応答)
+        myExternalIpPort = `${ip}:${port2}`;
+      }
+    }
+  };
 }
 
-ipcMain.on('HtoAP', async (event, arg) => {
-  try {
-    relayHost = await getIP('delthas.fr'); // AP server
-  } catch (e) {
-    console.error('DNS lookup error:', e);
-    event.reply('HtoAP', { result: false, msg: 'オートパンチサーバーのDNS情報を取得できませんでした。\nネットワークの設定を見直してください。' });
-    return;
-  }
-  const [myIp, myPort] = arg.split(':');
-  register2AP(event, myIp, myPort);
-
-
-
-  client.on('message', holepunchProcess);
-
-
-  const waitClient = (msg, rinfo) => {
-
-
-  };
-
-  console.log('オートパンチサーバーにアクセス');
-  // 5秒毎にIPを登録
-
-});
-
-ipcMain.on('do-ping-ap', async (event, arg) => {
-
-  const [trgIp, trgPort] = arg.split(':');
-
-  // オートパンチからホストの情報を取得
-  const relayHost = await getIP('delthas.fr'); // AP server
-  const relayPort = 14763;
-  const targetIp = trgIp;
-  const targetPort = Number(trgPort);
-
-  const ipParts = targetIp.split('.').map(Number);
-
-  const buf = Buffer.alloc(8);
-  buf.writeUInt16BE(targetPort, 0);
-  buf.writeUInt8(ipParts[0], 2);
-  buf.writeUInt8(ipParts[1], 3);
-  buf.writeUInt8(ipParts[2], 4);
-  buf.writeUInt8(ipParts[3], 5);
-  buf.writeUInt16BE(targetPort, 6);
-
-  let punched = false;
-  let peerIp = '';
-  let peerNatPort = 0;
-  let punchTimeouts = [];
-
-  function holepunchProcess(msg, rinfo) {
-    if (!punched && msg.length >= 8) {
-      console.log('オートパンチサーバーから情報取得成功');
-      // 最初のメッセージ → ホストの情報
-      const peerPort = msg.readUInt16BE(0);
-      peerNatPort = msg.readUInt16BE(2);
-      peerIp = `${msg[4]}.${msg[5]}.${msg[6]}.${msg[7]} `;
-      console.log(`Host:${peerIp}:${peerPort}/NAT Port:${peerNatPort}`);
-
-      // ホールパンチ
-      for (let i = 0; i < 10; i++) {
-        const timeoutId = setTimeout(() => {
-          const msg = Buffer.from([0]);
-          client.send(msg, peerNatPort, peerIp, (err) => {
-            if (err) console.error('送信エラー:', err);
-            // else console.log(`send holepunch ${i + 1}: ${peerIp}:${peerNatPort}`);
-          });
-        }, i * 190);
-        punchTimeouts.push(timeoutId);
-      }
-      punchTimeouts.push(setTimeout(() => {
-        console.log('ホールパンチ失敗、ダメ元で計測');
-        client.removeListener('message', holepunchProcess);
-        ipcMain.emit('do-ping', event, `${peerIp}:${peerNatPort}`);
-      }, 2000)); // 2秒後にタイムアウト
-      punched = true; // 二重処理防止
-    } else {
-      // 2回目以降 → 相手からの応答
-      // 既に同じ相手と計測をした場合、holepunchが既に実行中の可能性があるので検知
-      if (msg[0] === 0x00 && rinfo.address === peerIp) {
-        punchTimeouts.forEach(clearTimeout);
-        punchTimeouts = [];
-        console.log(`recv holepunch reply from ${peerIp}`);
-        punched = true;
-        client.removeListener('message', holepunchProcess);
-        ipcMain.emit('do-ping', event, `${peerIp}:${peerNatPort}`);
-      }
-    }
-  }
-
-  client.on('message', holepunchProcess);
-
-  client.send(buf, relayPort, relayHost, () => {
-    console.log('オートパンチサーバーにアクセス');
-    // 2秒後にタイムアウト
-    setTimeout(() => {
-      if (!punched) {
-        console.log('オートパンチサーバーから情報取得失敗、通常のPORTで計測');
-        client.removeListener('message', holepunchProcess);
-        ipcMain.emit('do-ping', event, `${trgIp}:${trgPort}`);
-      }
-    }, 2000);
-  });
-
-});
-
-ipcMain.on('do-ping', (event, arg) => {
-  const [trgIp, trgPort] = arg.split(':');
-
-  let postCount = 0;
-  let recvCount = 0;
-  let timeouts = 0;
-  let sendTime = [];
-  let result = [];
-
-  function delayCheck(msg) {
-    if (msg[0] !== 0x03) return;
-    if (timeouts > 0) {
-      timeouts--;
-      getPing(recvCount, false);
-    } else {
-      getPing(recvCount, (Date.now() - sendTime[recvCount]) / 16.6, false);
-    }
-    recvCount++;
-  }
-
-  const getPing = (idx, v) => {
-    if (result[idx]) return;
-    result[idx] = v;
-    console.log('result', idx, v);
-    event.reply('result-ping', result[idx]);
-  };
-
-  client.on('message', delayCheck);
-
-  const strToByte = (str) => str.match(/.{2}/g).map((s) => parseInt(s, 16));
-  function intervalHelper() {
-    const data = WatchBuffer1();
-    client.send(data, 0, data.length, trgPort, trgIp, (err) => {
-      sendTime[postCount] = Date.now();
-      setTimeout((pc) => {
-        timeouts += result[pc] ? 0 : 1;
-        getPing(pc, false);
-      }, 800, postCount);
-      postCount++;
-      if (err) {
-        throw err;
-      }
-    });
-  }
-
-  intervalHelper();
-
-  const timer = setInterval(intervalHelper, 1000);
-
-  setTimeout(() => {
-    clearInterval(timer);
-    event.reply('result-ping', 'end');
-    client.removeListener('message', delayCheck);
-  }, 1000 * 7 - 100);
-
-  // https://hackmd.io/@yoG90kkvSRmw42HiR0pozw/H1V3vcVTf?type=view
-  function WatchBuffer1() {
-    const port = trgPort.toString(16).padStart(4, '0').match(/.{2}/g);
-    const ip = trgIp
-      .split('.')
-      .map((v) => Number(v).toString(16).padStart(2, '0'));
-    const bytes = [
-      ['01'],
-      ['0200'],
-      port,
-      ip,
-      ['00000000'],
-      ['00000000'],
-      ['02'],
-      ['00'],
-      port,
-      ip,
-      ['00000000'],
-      ['00000000'],
-      ['0000'],
-      ['0000'],
-    ];
-    return Buffer.concat(
-      bytes.map((byte) => Buffer.from(byte.map((s) => strToByte(s)).flat()))
-    );
-  }
-});
+function parseApResponse(msg) {
+  const port1 = msg.readUInt16BE(0);
+  const port2 = msg.readUInt16BE(2);
+  const ip = `${msg[4]}.${msg[5]}.${msg[6]}.${msg[7]}`;
+  return { port1, port2, ip };
+}
 
 async function createWindow() {
   // Create the browser window.
@@ -312,7 +165,7 @@ async function createWindow() {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
     },
-    title: '非想天則ラグチェッカー',
+    title: 'th123ConnectivityTester',
   });
   mainWindow.setMenuBarVisibility(false);
 
@@ -330,10 +183,116 @@ async function createWindow() {
   }
 }
 
-const gotTheLock = app.requestSingleInstanceLock();
+function getStunResponse(event) {
+  return function getStunResponseHelper(msg, rinfo) {
+    if (msg.length >= 20) {
+      const stunInfo = parseStunResponse(msg);
+      if (stunInfo) {
+        console.log(`Your global IP: ${stunInfo.ip}, Port: ${stunInfo.port}`);
+        const myExternalIpPortByStun = `${stunInfo.ip}:${stunInfo.port}`;
+        if (myExternalIpPort === myExternalIpPortByStun) {
+          cleanupAndReply('toSTUN', event, { result: true, msg: `外部ポートに変化はありませんでした。` });
+        } else {
+          cleanupAndReply('toSTUN', event, { result: false, msg: `外部ポートに変化がありました。\nNATが原因でホストは不可能です。\n変化後の外部IP:Port[${myExternalIpPortByStun}]` });
+        }
+      } else {
+        cleanupAndReply('toSTUN', event, { result: false, msg: `STUNサーバーからの応答の解析に失敗しました。\n` });
+      }
+    }
+  };
+}
 
+function send2Stun(event, stun, port) {
+  const stunRequest = createGoogleStunBindingRequest();
+  client.send(stunRequest, port, stun, (err) => {
+    if (err) {
+      cleanupAndReply('toSTUN', event, { result: false, msg: 'STUNサーバーへの接続に失敗しました。\nネットワークの設定を見直してください。' });
+      console.error('Error sending message:', err);
+    } else {
+      console.log(`STUN Binding Request sent to ${stun}:${port}`);
+    }
+  });
+  function createGoogleStunBindingRequest() {
+    const buf = Buffer.alloc(20);
+    // STUN binding request header
+    buf.writeUInt16BE(0x0001, 0); // Message Type: Binding Request
+    buf.writeUInt16BE(0x0000, 2); // Message Length: 0
+    buf.writeUInt32BE(0x2112A442, 4); // Magic Cookie
+    // Transaction ID: 12 bytes (ランダムでOK)
+    for (let i = 0; i < 12; i++) {
+      buf[8 + i] = Math.floor(Math.random() * 256);
+    }
+    return buf;
+  }
+}
+
+function parseStunResponse(msg) {
+  // ヘッダーは20バイト
+  let offset = 20;
+  while (offset < msg.length) {
+    const attrType = msg.readUInt16BE(offset);
+    const attrLen = msg.readUInt16BE(offset + 2);
+    // XOR-MAPPED-ADDRESS属性は0x0020
+    if (attrType === 0x0020) {
+      const family = msg[offset + 5];
+      let port = msg.readUInt16BE(offset + 6);
+      port ^= 0x2112;
+      let ip;
+      if (family === 0x01) { // IPv4
+        const ipBuf = msg.slice(offset + 8, offset + 12);
+        const magicCookie = msg.readUInt32BE(4);
+        for (let i = 0; i < 4; i++) {
+          ipBuf[i] ^= (magicCookie >> ((3 - i) * 8)) & 0xff;
+        }
+        ip = Array.from(ipBuf).join('.');
+      } else if (family === 0x02) { // IPv6
+        // IPv6対応は省略
+        ip = 'IPv6 not supported';
+      }
+      return { ip, port };
+    }
+    offset += 4 + attrLen;
+  }
+  return null;
+}
+
+function holepunching(event, evName, trgIp, trgPort) {
+  const trgName = evName === 'toClient' ? 'クライアント' : 'ホスト';
+  console.log(`start holepunching to ${trgName}[${trgIp}:${trgPort}]`);
+  timers.push(setInterval(() => {
+    const msg = Buffer.from([0]);
+    client.send(msg, trgPort, trgIp, (err) => {
+      if (err) {
+        console.error('送信エラー:', err);
+        cleanupAndReply(evName, event, { result: false, msg: `${trgName}[${trgIp}:${trgPort}]へのデータの送信に失敗しました。\nネットワークの設定を見直してください。` });
+      }
+    });
+  }, 200));
+}
+
+function getHolepunchResponse(event, evName, trgIp) {
+  const msg = evName === 'toClient' ? 'クライアントと接続が確認できました🎉 ホスト可能です。' : 'ホストと接続が確認できました🎉';
+  return function getStunResponseHelper(msg, rinfo) {
+    if (msg[0] === 0x00 && rinfo.address === trgIp) {
+      console.log(`recv holepunch reply from ${trgIp}`);
+      cleanupAndReply(evName, event, { result: true, msg });
+    }
+  };
+}
+
+// 各ステップに必要な関数群ここまで *******************************************
+
+
+
+client.on('error', (err) => {
+  console.error('Socket error:', err);
+  dialog.showErrorBox(`ソケットエラーが発生しました。アプリケーションを再起動してください。\n${err.message}`);
+  client.close();
+});
+
+// 多重起動を防止
+const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
-  // すでにインスタンスが存在する場合は終了
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
@@ -342,7 +301,11 @@ if (!gotTheLock) {
 } else {
   app.whenReady().then(() => {
     createWindow();
-    client.bind(BindPort);
+    try {
+      client.bind(BindPort);
+    } catch (e) {
+      client.bind(BindPort + 1);
+    }
     electronApp.setAppUserModelId(app.getName());
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window);
@@ -350,10 +313,6 @@ if (!gotTheLock) {
   });
 }
 
-
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
@@ -361,5 +320,21 @@ app.on('window-all-closed', () => {
   client.close();
 });
 
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
+async function getIP(domain) {
+  try {
+    const result = await dns.lookup(domain, { family: 4 }); // IPv4のみ
+    return result.address;
+  } catch (err) {
+    console.error('DNS lookup error:', err);
+    throw new Error(`DNS lookup error for ${domain}: ${err.message}`);
+  }
+}
+
+function cleanupAndReply(evName, event, ret) {
+  if (msgHandler) client.removeListener('message', msgHandler);
+  timers.forEach((t) => clearInterval(t));
+  timers = [];
+  event.reply(evName, ret);
+}
+
+

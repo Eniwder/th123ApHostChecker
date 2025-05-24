@@ -200,32 +200,29 @@ async function testHost() {
   logs.splice(0, logs.length);
 
   changeStep(Step.FW4H, GraphState.Pooling);
-  logs.push('[1/6] ファイアウォールのルールを取得します。');
+  logs.push('[1/4] ファイアウォールのルールを取得します。');
   if (await waitIpc('checkFW')) return;
 
   changeStep(Step.Host2AP, GraphState.Pooling);
-  logs.push('[2/6] オートパンチにホスト情報を送信。クライアントからのアクセスを待機中。3分後にタイムアウトします。');
-  if (await waitIpc('HtoAP')) return;
-
+  logs.push('[2/4] オートパンチにホスト情報を送信。クライアントからのアクセスを待機中。1分後にタイムアウトします。');
+  // TODO : タイムアウト処理
+  if (await waitIpc('HtoAP', inputIpport.value)) return;
   changeStep(Step.AP2User, GraphState.Ping);
-  logs.push('[3/6] クライアントがオートパンチにアクセスし、お互いの情報を取得しました。');
-  logs.push(`・クライアントの情報：${inputIpport.value}`);
-  await delay(StepDelay);
+  await delay(StepDelay * 1.5);
 
-  window.ipcRenderer.send('toSTUN');
   changeStep(Step.Host2Stun, GraphState.Ping);
-  logs.push('[4/6] Googleにアクセスして外部ポートの変化を確認しました。以下の外部ポートがクライアントから伝えられたものと違う場合はNATが原因でホストが不可能です。');
-  logs.push(`・自身の外部ポート：${inputIpport.value}`);
+  logs.push('[3/4] Googleにアクセスして外部ポートの変化を確認します。');
   await delay(StepDelay);
+  if (await waitIpc('toSTUN')) return;
   changeStep(Step.Stun2Host, GraphState.Ping);
   await delay(StepDelay);
 
-  window.ipcRenderer.send('toClient');
   changeStep(Step.Holepunching, GraphState.Pooling);
-  logs.push('[5/6] クライアントとUDPホールパンチングを実施します。しばらくお待ち下さい。');
+  logs.push('[4/4] クライアントとUDPホールパンチングを実施します。30秒後にタイムアウトします。');
+  // TODO : タイムアウト処理
   await delay(StepDelay);
-
-  logs.push('[6/6] クライアントと通信に成功しました。ホスト可能です。');
+  if (await waitIpc('toClient')) return;
+  logs.push('検証を終了します。お疲れ様でした。');
 }
 
 async function waitIpc(eventName, ...args) {
@@ -233,7 +230,7 @@ async function waitIpc(eventName, ...args) {
   const { result, msg } = await ipcPromisify(eventName);
   await delay(StepDelay);
   checkLog(result);
-  logs.push(msg);
+  logs.push(...[msg].flat());
   return result;
 }
 
