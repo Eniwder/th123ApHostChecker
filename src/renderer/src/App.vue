@@ -194,7 +194,7 @@ function checkLog(success) {
     currentState.value = GraphState.Error;
   }
 }
-
+// TODO https://www.npmjs.com/package/nat-upnp
 async function testHost() {
   checkbtn.progress = true;
   logs.splice(0, logs.length);
@@ -284,11 +284,11 @@ function suspend() {
 }
 
 onBeforeUnmount(() => {
-  // window.ipcRenderer.removeAllListeners('result-ping');
+  window.ipcRenderer.removeAllListeners();
 });
 
 
-onMounted(() => { });
+// onMounted(() => { });
 
 function changeStep(step, state) {
   currentStep.value = step;

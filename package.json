@@ -19,6 +19,7 @@
     "@mdi/font": "7.4.47",
     "core-js": "^3.42.0",
     "dgram": "^1.0.1",
+    "nat-upnp": "^1.1.1",
     "vis-network": "^9.1.10",
     "vue": "^3.5.13",
     "vue-echarts": "^7.0.3",

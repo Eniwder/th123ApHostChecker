@@ -67,6 +67,7 @@ ipcMain.on('toClient', async (event, arg) => {
 // 各ステップに必要な関数群 *******************************************
 
 // TODO 自分自身もチェックする
+// TODO 失敗時にth123.exeという名前か確認
 async function checkFirewallRule() {
   const psCommand = `
 Get-NetFirewallRule | Where-Object {
